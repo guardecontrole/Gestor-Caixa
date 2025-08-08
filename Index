@@ -1,0 +1,1800 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, Legend, ResponsiveContainer } from 'recharts';
+import { Home, ArrowUpCircle, ArrowDownCircle, Plus, Edit, Trash2, X as IconX, AlertTriangle, MoreVertical, Folder, Target, Settings, Users, Briefcase, CheckCircle, Pause, Play, Copy, Undo2, Redo2, Upload, Download, Eye, FileText, User, Sun, Moon } from 'lucide-react';
+
+// --- UTILITÁRIOS DE TEMA AVANÇADO ---
+
+const hexToRgb = (hex) => {
+    let result = /^#?([a-f\d]{2})([a-f\d]{2})([a-f\d]{2})$/i.exec(hex);
+    return result ? { r: parseInt(result[1], 16), g: parseInt(result[2], 16), b: parseInt(result[3], 16) } : null;
+};
+
+const hexToHsl = (hex) => {
+    const rgb = hexToRgb(hex);
+    if (!rgb) return [0, 0, 0];
+    let r = rgb.r / 255, g = rgb.g / 255, b = rgb.b / 255;
+    let max = Math.max(r, g, b), min = Math.min(r, g, b);
+    let h = 0, s, l = (max + min) / 2;
+    if (max !== min) {
+        const d = max - min;
+        s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+        switch (max) {
+            case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+            case g: h = (b - r) / d + 2; break;
+            case b: h = (r - g) / d + 4; break;
+        }
+        h /= 6;
+    }
+    return [h * 360, s * 100, l * 100];
+};
+
+const hslToHex = (h, s, l) => {
+    s /= 100; l /= 100;
+    let c = (1 - Math.abs(2 * l - 1)) * s,
+        x = c * (1 - Math.abs((h / 60) % 2 - 1)),
+        m = l - c / 2, r = 0, g = 0, b = 0;
+    if (h >= 0 && h < 60) { [r, g, b] = [c, x, 0]; }
+    else if (h >= 60 && h < 120) { [r, g, b] = [x, c, 0]; }
+    else if (h >= 120 && h < 180) { [r, g, b] = [0, c, x]; }
+    else if (h >= 180 && h < 240) { [r, g, b] = [0, x, c]; }
+    else if (h >= 240 && h < 300) { [r, g, b] = [x, 0, c]; }
+    else if (h >= 300 && h < 360) { [r, g, b] = [c, 0, x]; }
+    const toHex = (n) => Math.round((n + m) * 255).toString(16).padStart(2, '0');
+    return `#${toHex(r)}${toHex(g)}${toHex(b)}`;
+};
+
+const adjustLightness = (hex, percent) => {
+    const [h, s, l] = hexToHsl(hex);
+    const newLightness = Math.max(0, Math.min(100, l + percent));
+    return hslToHex(h, s, newLightness);
+};
+
+const getLuminance = (r, g, b) => {
+    const a = [r, g, b].map(v => (v / 255 <= 0.03928) ? v / 255 / 12.92 : Math.pow((v / 255 + 0.055) / 1.055, 2.4));
+    return a[0] * 0.2126 + a[1] * 0.7152 + a[2] * 0.0722;
+};
+
+const getContrast = (hex1, hex2) => {
+    const rgb1 = hexToRgb(hex1), rgb2 = hexToRgb(hex2);
+    if (!rgb1 || !rgb2) return 1;
+    const lum1 = getLuminance(rgb1.r, rgb1.g, rgb1.b), lum2 = getLuminance(rgb2.r, rgb2.g, rgb2.b);
+    return (Math.max(lum1, lum2) + 0.05) / (Math.min(lum1, lum2) + 0.05);
+};
+
+const generateThemeCss = (hex) => {
+    if (!/^#[0-9A-F]{6}$/i.test(hex)) hex = '#4ba5ff';
+    const [h, s, l] = hexToHsl(hex);
+
+    const themeVars = {
+        '--primary-color': hslToHex(h, s, l),
+        '--primary-color-hover': hslToHex(h, s, Math.max(0, l - 10)),
+        '--primary-color-bg': `hsla(${h}, ${s}%, ${l}%, 0.2)`,
+        '--color-slate-50': hslToHex(h, 20, 97),
+        '--color-slate-100': hslToHex(h, 22, 94),
+        '--color-slate-200': hslToHex(h, 18, 88),
+        '--color-slate-300': hslToHex(h, 15, 78),
+        '--color-slate-400': hslToHex(h, 14, 68),
+        '--color-slate-500': hslToHex(h, 12, 58),
+        '--color-slate-600': hslToHex(h, 10, 48),
+        '--color-slate-700': hslToHex(h, 12, 35),
+        '--color-slate-800': hslToHex(h, 15, 22),
+        '--color-slate-900': hslToHex(h, 18, 12),
+    };
+
+    let css = ':root {\n';
+    for (const [key, value] of Object.entries(themeVars)) {
+        css += `  ${key}: ${value};\n`;
+    }
+    css += '}';
+    return css;
+};
+
+// Dados Iniciais (Vazios para novo usuário)
+const initialData = {
+  userProfile: {
+    fullName: '',
+    companyName: '',
+    companyStartDate: '',
+    email: '',
+    password: 'password123',
+    themeColor: '#4ba5ff',
+    companyLogo: null
+  },
+  transactions: [],
+  categories: [],
+  destinations: [],
+  clients: []
+};
+
+// --- HOOKS CUSTOMIZADOS ---
+const useHistoryState = (initialState) => {
+    const [history, setHistory] = useState([initialState]);
+    const [currentIndex, setCurrentIndex] = useState(0);
+
+    const setState = (action) => {
+        const newState = typeof action === 'function' ? action(history[currentIndex]) : action;
+        const newHistory = history.slice(0, currentIndex + 1);
+        
+        setHistory([...newHistory, newState]);
+        setCurrentIndex(newHistory.length);
+    };
+
+    const undo = () => {
+        if (currentIndex > 0) {
+            setCurrentIndex(currentIndex - 1);
+        }
+    };
+
+    const redo = () => {
+        if (currentIndex < history.length - 1) {
+            setCurrentIndex(currentIndex + 1);
+        }
+    };
+
+    const resetHistory = (newState) => {
+        setHistory([newState]);
+        setCurrentIndex(0);
+    }
+
+    return {
+        state: history[currentIndex],
+        setState,
+        undo,
+        redo,
+        resetHistory,
+        canUndo: currentIndex > 0,
+        canRedo: currentIndex < history.length - 1,
+    };
+};
+
+
+// --- COMPONENTES AUXILIARES ---
+
+const formatCurrency = (value) => {
+  if (typeof value !== 'number' || isNaN(value)) {
+    value = 0;
+  }
+  return new Intl.NumberFormat('pt-BR', {
+    style: 'currency',
+    currency: 'BRL',
+  }).format(value);
+};
+
+const formatDate = (dateString) => {
+  return new Date(dateString + 'T00:00:00').toLocaleDateString('pt-BR');
+};
+
+const Modal = ({ children, isOpen, onClose, theme }) => {
+  if (!isOpen) return null;
+  return (
+    <div className="fixed inset-0 bg-black bg-opacity-70 z-50 overflow-y-auto p-4 animate-fade-in-fast">
+      <div className="flex min-h-full items-center justify-center">
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white'} w-full max-w-4xl rounded-2xl shadow-2xl relative my-8`}>
+            <div className="p-6 sm:p-8">
+                <button onClick={onClose} className={`absolute top-4 right-4 ${theme === 'dark' ? 'text-[var(--color-slate-400)] hover:text-white' : 'text-gray-500 hover:text-gray-800'} transition-colors z-10`}>
+                    <IconX size={24} />
+                </button>
+                {children}
+            </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const ConfirmationModal = ({ isOpen, onClose, onConfirm, title, message, theme }) => {
+  if (!isOpen) return null;
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} theme={theme}>
+      <div className={`${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-900)]'} flex flex-col items-center text-center`}>
+        <div className="w-16 h-16 flex items-center justify-center bg-rose-500/20 rounded-full mb-4">
+          <AlertTriangle size={40} className="text-rose-500" />
+        </div>
+        <h3 className="text-xl font-bold mb-2">{title}</h3>
+        <p className={`${theme === 'dark' ? 'text-[var(--color-slate-300)]' : 'text-[var(--color-slate-600)]'} mb-6`}>{message}</p>
+        <div className="flex justify-center space-x-4 w-full">
+          <button type="button" onClick={onClose} className={`flex-1 px-6 py-2 rounded-lg ${theme === 'dark' ? 'bg-[var(--color-slate-600)] hover:bg-[var(--color-slate-500)]' : 'bg-gray-200 hover:bg-gray-300'} text-white transition`}>Cancelar</button>
+          <button type="button" onClick={onConfirm} className="flex-1 px-6 py-2 rounded-lg bg-rose-600 text-white hover:bg-rose-500 font-semibold transition">Confirmar</button>
+        </div>
+      </div>
+    </Modal>
+  );
+};
+
+// --- FORMULÁRIOS ---
+
+const ExpenseForm = ({ onSubmit, onCancel, transactionData, categories = [], theme }) => {
+    const [description, setDescription] = useState(transactionData?.description || '');
+    const [amount, setAmount] = useState(transactionData?.amount || '');
+    const [date, setDate] = useState(transactionData?.date || new Date().toISOString().split('T')[0]);
+    const [categoryId, setCategoryId] = useState(transactionData?.categoryId || '');
+    const [expenseType, setExpenseType] = useState(transactionData?.expenseType || 'Variável');
+    const [installments, setInstallments] = useState(transactionData?.installments > 1 && transactionData?.installments < 9999 ? transactionData.installments : 1);
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const parsedAmount = parseFloat(String(amount).replace(',', '.'));
+        if (isNaN(parsedAmount) || parsedAmount <= 0) return;
+
+        let payload = {
+            ...transactionData,
+            id: transactionData?.id || Date.now(),
+            type: 'expense',
+            description,
+            date,
+            categoryId,
+            expenseType,
+            isPaused: transactionData?.isPaused || false,
+            paidInstallments: transactionData?.paidInstallments || 0,
+        };
+
+        switch (expenseType) {
+            case 'Parcelado':
+                payload = { ...payload, amount: parsedAmount, installments: parseInt(installments, 10) || 1 };
+                break;
+            case 'Fixo':
+                payload = { ...payload, amount: parsedAmount, installments: 9999 };
+                break;
+            case 'Fixo-Variável':
+                payload = { ...payload, amount: parsedAmount, installments: 9999, paymentHistory: transactionData?.paymentHistory || [] };
+                break;
+            case 'Variável':
+            default:
+                payload = { ...payload, amount: parsedAmount, installments: 1 };
+                break;
+        }
+
+        onSubmit(payload);
+    };
+    
+    return (
+        <form onSubmit={handleSubmit} className={`space-y-6 ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-900)]'}`}>
+            <h3 className="text-2xl font-bold">{transactionData ? 'Editar Saída' : 'Nova Saída'}</h3>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Descrição</label>
+                <input type="text" value={description} onChange={e => setDescription(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+            </div>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Tipo de Despesa</label>
+                <select value={expenseType} onChange={e => setExpenseType(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`}>
+                    <option value="Variável">Variável (Pagamento Único)</option>
+                    <option value="Parcelado">Parcelado</option>
+                    <option value="Fixo">Fixo (Assinatura)</option>
+                    <option value="Fixo-Variável">Fixo (Valor Variável)</option>
+                </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>{expenseType === 'Parcelado' ? 'Valor Total' : 'Valor Mensal/Único'}</label>
+                    <input type="text" inputMode="decimal" value={String(amount).replace('.', ',')} onChange={e => setAmount(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                </div>
+                {expenseType === 'Parcelado' && (
+                    <div>
+                        <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Nº de Parcelas</label>
+                        <input type="number" value={installments} onChange={e => setInstallments(e.target.value)} min="1" className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                    </div>
+                )}
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>{expenseType === 'Parcelado' ? 'Data da 1ª Parcela' : 'Data do Vencimento'}</label>
+                    <input type="date" value={date} onChange={e => setDate(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                </div>
+                 <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Categoria</label>
+                    <select value={categoryId} onChange={e => setCategoryId(e.target.value ? parseInt(e.target.value, 10) : '')} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required>
+                        <option value="">Selecione uma categoria</option>
+                        {categories.map(cat => <option key={cat.id} value={cat.id}>{cat.name}</option>)}
+                    </select>
+                </div>
+            </div>
+            <div className="flex justify-end space-x-4 pt-4">
+                <button type="button" onClick={onCancel} className={`px-6 py-2 rounded-lg ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-white hover:bg-[var(--color-slate-500)]' : 'bg-gray-200 text-[var(--color-slate-800)] hover:bg-gray-300'} transition`}>Cancelar</button>
+                <button type="submit" className="px-6 py-2 rounded-lg bg-[var(--primary-color)] text-white hover:bg-[var(--primary-color-hover)] font-semibold transition">Salvar</button>
+            </div>
+        </form>
+    );
+};
+
+const IncomeForm = ({ onSubmit, onCancel, transactionData, clients = [], theme }) => {
+    const [description, setDescription] = useState(transactionData?.description || '');
+    const [amount, setAmount] = useState(transactionData?.amount || '');
+    const [date, setDate] = useState(transactionData?.date || new Date().toISOString().split('T')[0]);
+    const [clientId, setClientId] = useState(transactionData?.clientId || '');
+    const [incomeType, setIncomeType] = useState(transactionData?.incomeType || 'Único');
+    const [installments, setInstallments] = useState(transactionData?.installments > 1 && transactionData?.installments < 9999 ? transactionData.installments : 1);
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const parsedAmount = parseFloat(String(amount).replace(',', '.'));
+        if (isNaN(parsedAmount) || parsedAmount <= 0) return;
+
+        let payload = {
+            ...transactionData,
+            id: transactionData?.id || Date.now(),
+            type: 'income',
+            description,
+            date,
+            clientId: clientId || undefined,
+            incomeType,
+            isPaused: transactionData?.isPaused || false,
+            paidInstallments: transactionData?.paidInstallments || 0,
+        };
+
+        switch (incomeType) {
+            case 'Parcelado':
+                payload = { ...payload, amount: parsedAmount, installments: parseInt(installments, 10) || 1 };
+                break;
+            case 'Assinatura':
+                payload = { ...payload, amount: parsedAmount, installments: 9999 };
+                break;
+            case 'Único':
+            default:
+                payload = { ...payload, amount: parsedAmount, installments: 1, paidInstallments: 1 };
+                break;
+        }
+
+        onSubmit(payload);
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className={`space-y-6 ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-900)]'}`}>
+            <h3 className="text-2xl font-bold">{transactionData ? 'Editar Entrada' : 'Nova Entrada'}</h3>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Descrição</label>
+                <input type="text" value={description} onChange={e => setDescription(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+            </div>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Tipo de Receita</label>
+                <select value={incomeType} onChange={e => setIncomeType(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`}>
+                    <option value="Único">Único (Pagamento Imediato)</option>
+                    <option value="Parcelado">Parcelado</option>
+                    <option value="Assinatura">Assinatura (Recorrente)</option>
+                </select>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>{incomeType === 'Parcelado' ? 'Valor Total' : 'Valor Mensal/Único'}</label>
+                    <input type="text" inputMode="decimal" value={String(amount).replace('.', ',')} onChange={e => setAmount(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                </div>
+                {incomeType === 'Parcelado' && (
+                    <div>
+                        <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Nº de Parcelas</label>
+                        <input type="number" value={installments} onChange={e => setInstallments(e.target.value)} min="1" className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                    </div>
+                )}
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>{incomeType === 'Parcelado' ? 'Data da 1ª Parcela' : 'Data do Recebimento'}</label>
+                    <input type="date" value={date} onChange={e => setDate(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                </div>
+                 <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Cliente (Opcional)</label>
+                    <select value={clientId} onChange={e => setClientId(e.target.value ? parseInt(e.target.value, 10) : '')} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`}>
+                        <option value="">Nenhum cliente</option>
+                        {clients.map(client => <option key={client.id} value={client.id}>{client.name}</option>)}
+                    </select>
+                </div>
+            </div>
+            <div className="flex justify-end space-x-4 pt-4">
+                <button type="button" onClick={onCancel} className={`px-6 py-2 rounded-lg ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-white hover:bg-[var(--color-slate-500)]' : 'bg-gray-200 text-[var(--color-slate-800)] hover:bg-gray-300'} transition`}>Cancelar</button>
+                <button type="submit" className="px-6 py-2 rounded-lg bg-[var(--primary-color)] text-white hover:bg-[var(--primary-color-hover)] font-semibold transition">Salvar</button>
+            </div>
+        </form>
+    );
+};
+
+const PALETTE_COLORS = [
+    '#4f46e5', '#ef4444', '#f97316', '#eab308', '#22c55e', '#14b8a6', '#0ea5e9', '#8b5cf6', '#d946ef'
+];
+
+const CategoryForm = ({ onSubmit, onCancel, categoryData, theme }) => {
+    const [name, setName] = useState(categoryData?.name || '');
+    const [color, setColor] = useState(categoryData?.color || '#4f46e5');
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSubmit({ id: categoryData?.id || Date.now(), name, color });
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className={`space-y-6 ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-900)]'}`}>
+            <h3 className="text-2xl font-bold">{categoryData ? 'Editar Categoria' : 'Nova Categoria de Despesa'}</h3>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Nome da Categoria</label>
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+            </div>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Cor</label>
+                <div className="flex flex-wrap gap-3">
+                    {PALETTE_COLORS.map(c => (
+                        <div key={c} onClick={() => setColor(c)} className="w-10 h-10 rounded-full cursor-pointer transition-transform transform hover:scale-110" style={{ backgroundColor: c, outline: color === c ? '2px solid white' : 'none', outlineOffset: '2px' }}></div>
+                    ))}
+                </div>
+            </div>
+            <div className="flex justify-end space-x-4 pt-4">
+                <button type="button" onClick={onCancel} className={`px-6 py-2 rounded-lg ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-white hover:bg-[var(--color-slate-500)]' : 'bg-gray-200 text-[var(--color-slate-800)] hover:bg-gray-300'} transition`}>Cancelar</button>
+                <button type="submit" className="px-6 py-2 rounded-lg bg-[var(--primary-color)] text-white hover:bg-[var(--primary-color-hover)] font-semibold transition">Salvar</button>
+            </div>
+        </form>
+    );
+};
+
+const ClientForm = ({ onSubmit, onCancel, clientData, theme }) => {
+    const [name, setName] = useState(clientData?.name || '');
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSubmit({ id: clientData?.id || Date.now(), name });
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className={`space-y-6 ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-900)]'}`}>
+            <h3 className="text-2xl font-bold">{clientData ? 'Editar Cliente' : 'Novo Cliente'}</h3>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Nome do Cliente</label>
+                <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+            </div>
+            <div className="flex justify-end space-x-4 pt-4">
+                <button type="button" onClick={onCancel} className={`px-6 py-2 rounded-lg ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-white hover:bg-[var(--color-slate-500)]' : 'bg-gray-200 text-[var(--color-slate-800)] hover:bg-gray-300'} transition`}>Cancelar</button>
+                <button type="submit" className="px-6 py-2 rounded-lg bg-[var(--primary-color)] text-white hover:bg-[var(--primary-color-hover)] font-semibold transition">Salvar</button>
+            </div>
+        </form>
+    );
+};
+
+const DestinationForm = ({ onSubmit, onCancel, destinationData, allCategories, theme }) => {
+    const [name, setName] = useState(destinationData?.name || '');
+    const [percentage, setPercentage] = useState(destinationData?.percentage || '');
+    const [linkedCategoryIds, setLinkedCategoryIds] = useState(destinationData?.linkedCategoryIds || []);
+
+    const handleCategoryToggle = (catId) => {
+        setLinkedCategoryIds(prev => 
+            prev.includes(catId) ? prev.filter(id => id !== catId) : [...prev, catId]
+        );
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        const parsedPercentage = parseFloat(String(percentage).replace(',', '.'));
+        if(isNaN(parsedPercentage) || parsedPercentage < 0) return;
+        onSubmit({
+            id: destinationData?.id || Date.now(),
+            name,
+            percentage: parsedPercentage,
+            linkedCategoryIds
+        });
+    };
+
+    return (
+        <form onSubmit={handleSubmit} className={`space-y-6 ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-900)]'}`}>
+            <h3 className="text-2xl font-bold">{destinationData ? 'Editar Destino' : 'Novo Destino Orçamentário'}</h3>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-6">
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Nome do Destino</label>
+                    <input type="text" value={name} onChange={(e) => setName(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                </div>
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Percentual da Receita (%)</label>
+                    <input type="text" inputMode="decimal" value={String(percentage).replace('.', ',')} onChange={(e) => setPercentage(e.target.value)} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} required />
+                </div>
+            </div>
+            <div>
+                <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Vincular Categorias de Despesa</label>
+                <div className={`max-h-48 overflow-y-auto ${theme === 'dark' ? 'bg-[var(--color-slate-700)]/50' : 'bg-[var(--color-slate-100)]'} p-3 rounded-lg space-y-2`}>
+                    {allCategories.length > 0 ? allCategories.map(cat => (
+                        <label key={cat.id} className={`flex items-center gap-3 p-2 rounded-md ${theme === 'dark' ? 'hover:bg-[var(--color-slate-600)]/50' : 'hover:bg-[var(--color-slate-200)]'} cursor-pointer`}>
+                            <input
+                                type="checkbox"
+                                className={`h-5 w-5 rounded ${theme === 'dark' ? 'bg-[var(--color-slate-600)] border-[var(--color-slate-500)]' : 'bg-[var(--color-slate-200)] border-[var(--color-slate-400)]'} text-[var(--primary-color)] focus:ring-[var(--primary-color)]`}
+                                checked={linkedCategoryIds.includes(cat.id)}
+                                onChange={() => handleCategoryToggle(cat.id)}
+                            />
+                            <div className="w-3 h-3 rounded-full" style={{backgroundColor: cat.color}}></div>
+                            <span className={`${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{cat.name}</span>
+                        </label>
+                    )) : <p className={`${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-500)]'} text-center text-sm`}>Nenhuma categoria de despesa criada.</p>}
+                </div>
+            </div>
+            <div className="flex justify-end space-x-4 pt-4">
+                <button type="button" onClick={onCancel} className={`px-6 py-2 rounded-lg ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-white hover:bg-[var(--color-slate-500)]' : 'bg-gray-200 text-[var(--color-slate-800)] hover:bg-gray-300'} transition`}>Cancelar</button>
+                <button type="submit" className="px-6 py-2 rounded-lg bg-[var(--primary-color)] text-white hover:bg-[var(--primary-color-hover)] font-semibold transition">Salvar</button>
+            </div>
+        </form>
+    );
+};
+
+// --- COMPONENTES DE PÁGINA ---
+
+const Dashboard = ({ data, theme }) => {
+    const { transactions, categories, clients } = data;
+
+    const { totalIncome, totalExpenses, currentBalance } = useMemo(() => {
+        const income = transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0);
+        const expenses = transactions.filter(t => t.type === 'expense').reduce((sum, t) => sum + t.amount, 0);
+        return {
+            totalIncome: income,
+            totalExpenses: expenses,
+            currentBalance: income - expenses,
+        };
+    }, [transactions]);
+
+    const chartData = useMemo(() => {
+        const monthlyData = {};
+        transactions.forEach(t => {
+            const month = new Date(t.date + 'T00:00:00').toLocaleString('pt-BR', { month: 'short', year: '2-digit' });
+            if (!monthlyData[month]) {
+                monthlyData[month] = { name: month, Entradas: 0, Saídas: 0 };
+            }
+            if (t.type === 'income') {
+                monthlyData[month].Entradas += t.amount;
+            } else {
+                monthlyData[month].Saídas += t.amount;
+            }
+        });
+        
+        return Object.values(monthlyData).sort((a, b) => {
+            const [aMonth, aYear] = a.name.split('/');
+            const [bMonth, bYear] = b.name.split('/');
+            const monthMap = { 'jan': 0, 'fev': 1, 'mar': 2, 'abr': 3, 'mai': 4, 'jun': 5, 'jul': 6, 'ago': 7, 'set': 8, 'out': 9, 'nov': 10, 'dez': 11 };
+            const dateA = new Date(`20${aYear}`, monthMap[aMonth.toLowerCase()]);
+            const dateB = new Date(`20${bYear}`, monthMap[bMonth.toLowerCase()]);
+            return dateA - dateB;
+        });
+    }, [transactions]);
+    
+    const topClientsData = useMemo(() => {
+        const clientRevenue = {};
+        transactions.filter(t => t.type === 'income' && t.clientId).forEach(t => {
+            const client = clients.find(c => c.id === t.clientId);
+            if(client) {
+                if(!clientRevenue[client.name]) {
+                    clientRevenue[client.name] = 0;
+                }
+                clientRevenue[client.name] += t.amount;
+            }
+        });
+        return Object.entries(clientRevenue)
+            .sort(([,a],[,b]) => b - a)
+            .slice(0, 5)
+            .map(([name, amount]) => ({ name, amount }));
+    }, [transactions, clients]);
+
+    const recentTransactions = [...transactions].sort((a, b) => new Date(b.date) - new Date(a.date)).slice(0, 5);
+    
+    const textColor = theme === 'dark' ? 'var(--color-slate-400)' : 'var(--color-slate-500)';
+    const gridColor = theme === 'dark' ? 'var(--color-slate-700)' : 'var(--color-slate-200)';
+
+    return (
+        <div className="space-y-8 animate-fade-in">
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-6 rounded-2xl shadow-lg flex items-center space-x-4`}>
+                    <div className="p-3 bg-[var(--primary-color-bg)] rounded-xl"><Home className="text-[var(--primary-color)]" size={28}/></div>
+                    <div>
+                        <p className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} text-sm`}>Saldo Atual</p>
+                        <p className={`text-2xl font-bold ${currentBalance >= 0 ? (theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]') : 'text-rose-500'}`}>{formatCurrency(currentBalance)}</p>
+                    </div>
+                </div>
+                <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-6 rounded-2xl shadow-lg flex items-center space-x-4`}>
+                    <div className="p-3 bg-emerald-500/20 rounded-xl"><ArrowUpCircle className="text-emerald-400" size={28}/></div>
+                    <div>
+                        <p className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} text-sm`}>Total de Entradas (Mês)</p>
+                        <p className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{formatCurrency(totalIncome)}</p>
+                    </div>
+                </div>
+                <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-6 rounded-2xl shadow-lg flex items-center space-x-4`}>
+                    <div className="p-3 bg-rose-500/20 rounded-xl"><ArrowDownCircle className="text-rose-400" size={28}/></div>
+                    <div>
+                        <p className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} text-sm`}>Total de Saídas (Mês)</p>
+                        <p className={`text-2xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{formatCurrency(totalExpenses)}</p>
+                    </div>
+                </div>
+            </div>
+
+            <div className="grid grid-cols-1 lg:grid-cols-5 gap-6">
+                <div className={`lg:col-span-3 ${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-6 rounded-2xl shadow-lg`}>
+                    <h3 className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'} mb-4`}>Fluxo de Caixa Mensal</h3>
+                    <div style={{ width: '100%', height: 300 }}>
+                        <ResponsiveContainer>
+                            <BarChart data={chartData} margin={{ top: 5, right: 20, left: -10, bottom: 5 }}>
+                                <CartesianGrid strokeDasharray="3 3" stroke={gridColor} />
+                                <XAxis dataKey="name" stroke={textColor} />
+                                <YAxis stroke={textColor} tickFormatter={formatCurrency} />
+                                <Legend wrapperStyle={{ color: textColor }} />
+                                <Bar dataKey="Entradas" fill="#34d399" radius={[4, 4, 0, 0]} />
+                                <Bar dataKey="Saídas" fill="#f43f5e" radius={[4, 4, 0, 0]} />
+                            </BarChart>
+                        </ResponsiveContainer>
+                    </div>
+                </div>
+                <div className={`lg:col-span-2 ${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-6 rounded-2xl shadow-lg`}>
+                    <h3 className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'} mb-4`}>Top Clientes</h3>
+                    <div className="space-y-3">
+                        {topClientsData.length > 0 ? topClientsData.map((client, index) => (
+                             <div key={index} className={`flex justify-between items-center ${theme === 'dark' ? 'bg-[var(--color-slate-700)]/50' : 'bg-[var(--color-slate-100)]'} p-3 rounded-lg`}>
+                                <div className="flex items-center gap-3">
+                                    <span className={`font-bold ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>{index + 1}.</span>
+                                    <p className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{client.name}</p>
+                                </div>
+                                <p className="font-bold text-emerald-400">{formatCurrency(client.amount)}</p>
+                             </div>
+                        )) : <p className={`text-center ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'} py-4`}>Nenhuma receita associada a clientes.</p>}
+                    </div>
+                </div>
+            </div>
+
+            <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-6 rounded-2xl shadow-lg`}>
+                <h3 className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'} mb-4`}>Transações Recentes</h3>
+                <div className="space-y-3">
+                    {recentTransactions.length > 0 ? recentTransactions.map(t => {
+                        const isIncome = t.type === 'income';
+                        const category = !isIncome ? categories.find(c => c.id === t.categoryId) : null;
+                        const client = isIncome ? clients.find(c => c.id === t.clientId) : null;
+                        return (
+                            <div key={t.id} className={`flex justify-between items-center ${theme === 'dark' ? 'bg-[var(--color-slate-700)]/50' : 'bg-[var(--color-slate-100)]'} p-3 rounded-lg`}>
+                                <div className="flex items-center">
+                                    <div className={`p-2 rounded-full mr-3 ${isIncome ? 'bg-emerald-500/20' : 'bg-rose-500/20'}`}>
+                                        {isIncome ? <ArrowUpCircle size={20} className="text-emerald-400" /> : <ArrowDownCircle size={20} className="text-rose-400" />}
+                                    </div>
+                                    <div>
+                                        <p className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{t.description}</p>
+                                        <p className={`text-sm ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>
+                                            {formatDate(t.date)} 
+                                            {client && ` • ${client.name}`}
+                                            {category && ` • ${category.name}`}
+                                        </p>
+                                    </div>
+                                </div>
+                                <p className={`font-bold ${isIncome ? 'text-emerald-400' : 'text-rose-400'}`}>{formatCurrency(t.amount)}</p>
+                            </div>
+                        );
+                    }) : <p className={`text-center ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'} py-4`}>Nenhuma transação registrada.</p>}
+                </div>
+            </div>
+        </div>
+    );
+};
+
+const IncomePage = ({ data, onAdd, onUpdate, onDelete, onMarkAsReceived, onTogglePause, onDuplicate, theme }) => {
+    const { transactions, clients } = data;
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editingTransaction, setEditingTransaction] = useState(null);
+    const [openMenuId, setOpenMenuId] = useState(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (!event.target.closest('.actions-menu-container')) {
+                setOpenMenuId(null);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, []);
+    
+    const relevantTransactions = useMemo(() => 
+        transactions.filter(t => t.type === 'income').sort((a, b) => new Date(b.date) - new Date(a.date)),
+        [transactions]
+    );
+
+    const handleAddClick = () => {
+        setEditingTransaction(null);
+        setIsModalOpen(true);
+    };
+
+    const handleEditClick = (transaction) => {
+        setEditingTransaction(transaction);
+        setIsModalOpen(true);
+    };
+
+    const handleFormSubmit = (transactionData) => {
+        if (editingTransaction) {
+            onUpdate(transactionData);
+        } else {
+            onAdd(transactionData);
+        }
+        setIsModalOpen(false);
+    };
+
+    return (
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-4 sm:p-6 lg:p-8 rounded-2xl shadow-lg animate-fade-in flex flex-col h-full`}>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                 <div className="flex items-center gap-3">
+                    <ArrowUpCircle size={32} className="text-emerald-400" />
+                    <h2 className={`text-2xl sm:text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>Entradas</h2>
+                </div>
+                <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 bg-[var(--primary-color)] text-white rounded-lg hover:bg-[var(--primary-color-hover)] transition-transform transform hover:scale-105 shadow-lg">
+                    <Plus size={20} />
+                    Adicionar Entrada
+                </button>
+            </div>
+            <div className="overflow-auto flex-grow">
+                <table className="w-full text-left table-auto">
+                    <thead className={`border-b-2 ${theme === 'dark' ? 'border-[var(--color-slate-700)]' : 'border-[var(--color-slate-200)]'}`}>
+                        <tr className={`text-sm ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>
+                            <th className="p-3">Descrição</th>
+                            <th className="p-3 text-right">Valor Mensal</th>
+                            <th className="p-3 text-center">Progresso</th>
+                            <th className="p-3 text-center">Status</th>
+                            <th className="p-3 text-center">Ações</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {relevantTransactions.length === 0 ? (
+                            <tr><td colSpan={5} className={`text-center py-10 ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'}`}>Nenhuma entrada registrada.</td></tr>
+                        ) : relevantTransactions.map(t => {
+                            const client = clients.find(c => c.id === t.clientId);
+                            const monthlyAmount = t.incomeType === 'Parcelado' ? t.amount / t.installments : t.amount;
+                            const isComplete = t.incomeType === 'Parcelado' && t.paidInstallments >= t.installments;
+                            
+                            let dueDate = null;
+                            if (t.incomeType === 'Assinatura' || t.incomeType === 'Parcelado') {
+                                const startDate = new Date(t.date + 'T00:00:00');
+                                dueDate = new Date(startDate.getFullYear(), startDate.getMonth() + t.paidInstallments, startDate.getDate());
+                            }
+                            const isOverdue = dueDate && new Date() > dueDate && !isComplete && !t.isPaused;
+
+                            let statusText = t.incomeType;
+                            if(t.isPaused) statusText = "Pausado";
+                            else if(isComplete) statusText = "Concluído";
+                            else if(isOverdue) statusText = "Atrasado";
+                            else if(t.incomeType === 'Parcelado') statusText = "Andamento";
+                            else if(t.incomeType === 'Assinatura') statusText = "Ativo";
+
+                            return (
+                                <tr key={t.id} className={`border-b ${theme === 'dark' ? 'border-[var(--color-slate-800)]' : 'border-[var(--color-slate-100)]'} transition-colors ${t.isPaused ? (theme === 'dark' ? 'bg-[var(--color-slate-800)]/60' : 'bg-[var(--color-slate-100)]/60') : (theme === 'dark' ? 'hover:bg-[var(--color-slate-700)]/50' : 'hover:bg-[var(--color-slate-50)]')} ${isOverdue ? (theme === 'dark' ? 'bg-rose-900/30' : 'bg-rose-100') : ''}`}>
+                                    <td className={`p-3 font-medium ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{t.description}<p className={`text-xs ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>{client?.name || 'Sem Cliente'}</p></td>
+                                    <td className="p-3 text-right font-semibold text-emerald-400">{formatCurrency(monthlyAmount)}</td>
+                                    <td className={`p-3 text-center ${theme === 'dark' ? 'text-[var(--color-slate-300)]' : 'text-[var(--color-slate-600)]'}`}>
+                                        {t.incomeType === 'Parcelado' ? (
+                                            <div><span>{t.paidInstallments} / {t.installments}</span><p className={`text-xs ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'}`}>Recebido: {formatCurrency(t.paidInstallments * monthlyAmount)}</p></div>
+                                        ) : t.incomeType === 'Único' ? 'Recebido' : `Próx. Rec: ${dueDate ? dueDate.toLocaleDateString('pt-BR') : 'N/A'}`}
+                                    </td>
+                                    <td className="p-3 text-center">
+                                        <span className={`px-3 py-1 text-xs font-bold rounded-full ${
+                                            statusText === 'Pausado' ? (theme === 'dark' ? 'bg-[var(--color-slate-600)]/50 text-[var(--color-slate-400)]' : 'bg-[var(--color-slate-200)] text-[var(--color-slate-500)]') :
+                                            statusText === 'Concluído' || statusText === 'Único' ? 'bg-emerald-500/20 text-emerald-400' :
+                                            statusText === 'Atrasado' ? 'bg-rose-500/20 text-rose-400' :
+                                            statusText === 'Andamento' ? 'bg-yellow-500/20 text-yellow-400' :
+                                            statusText === 'Ativo' ? 'bg-[var(--primary-color-bg)] text-[var(--primary-color)]' :
+                                            (theme === 'dark' ? 'bg-[var(--color-slate-500)]/20 text-[var(--color-slate-300)]' : 'bg-[var(--color-slate-200)] text-[var(--color-slate-600)]')
+                                        }`}>{statusText}</span>
+                                    </td>
+                                    <td className="p-3">
+                                        <div className="flex justify-center items-center">
+                                            {!isComplete && t.incomeType !== 'Único' && !t.isPaused && <button onClick={() => onMarkAsReceived(t.id)} className={`p-2 text-emerald-400 ${theme === 'dark' ? 'hover:bg-emerald-500/20' : 'hover:bg-emerald-100'} rounded-md transition`} title="Marcar como recebido"><CheckCircle size={18} /></button>}
+                                            <div className="relative actions-menu-container">
+                                                <button onClick={() => setOpenMenuId(openMenuId === t.id ? null : t.id)} className={`p-2 ${theme === 'dark' ? 'text-[var(--color-slate-400)] hover:text-white hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-500)] hover:text-[var(--color-slate-800)] hover:bg-[var(--color-slate-200)]'} rounded-md transition`}><MoreVertical size={18} /></button>
+                                                {openMenuId === t.id && (
+                                                    <div className={`absolute right-0 top-full mt-2 w-40 ${theme === 'dark' ? 'bg-[var(--color-slate-900)] border-[var(--color-slate-700)]' : 'bg-white border-[var(--color-slate-200)]'} border rounded-lg shadow-xl z-10 animate-fade-in-fast`}>
+                                                        <button onClick={() => { handleEditClick(t); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-700)] hover:bg-[var(--color-slate-100)]'} hover:text-[var(--primary-color)] rounded-t-lg transition`}><Edit size={16} /> Editar</button>
+                                                        <button onClick={() => { onDuplicate(t.id); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-700)] hover:bg-[var(--color-slate-100)]'} hover:text-[var(--primary-color)] transition`}><Copy size={16} /> Duplicar</button>
+                                                        {t.incomeType !== 'Único' && <button onClick={() => { onTogglePause(t.id); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-700)] hover:bg-[var(--color-slate-100)]'} hover:text-[var(--primary-color)] transition`}>{t.isPaused ? <Play size={16}/> : <Pause size={16}/>} {t.isPaused ? 'Reativar' : 'Pausar'}</button>}
+                                                        <div className={`w-full h-px ${theme === 'dark' ? 'bg-[var(--color-slate-700)]' : 'bg-[var(--color-slate-200)]'} my-1`}></div>
+                                                        <button onClick={() => { onDelete(t.id); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 text-rose-500 hover:bg-rose-500/10 rounded-b-lg transition`}><Trash2 size={16} /> Excluir</button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} theme={theme}>
+                <IncomeForm onSubmit={handleFormSubmit} onCancel={() => setIsModalOpen(false)} transactionData={editingTransaction} clients={clients} theme={theme} />
+            </Modal>
+        </div>
+    );
+};
+
+const ExpensesPage = ({ data, onAdd, onUpdate, onDelete, onMarkAsPaid, onTogglePause, onDuplicate, theme }) => {
+    const { transactions, categories } = data;
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editingTransaction, setEditingTransaction] = useState(null);
+    const [openMenuId, setOpenMenuId] = useState(null);
+
+    useEffect(() => {
+        const handleClickOutside = (event) => {
+            if (!event.target.closest('.actions-menu-container')) {
+                setOpenMenuId(null);
+            }
+        };
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => {
+            document.removeEventListener('mousedown', handleClickOutside);
+        };
+    }, []);
+
+    const relevantTransactions = useMemo(() => 
+        transactions.filter(t => t.type === 'expense').sort((a, b) => new Date(b.date) - new Date(a.date)),
+        [transactions]
+    );
+
+    const handleAddClick = () => {
+        setEditingTransaction(null);
+        setIsModalOpen(true);
+    };
+
+    const handleEditClick = (transaction) => {
+        setEditingTransaction(transaction);
+        setIsModalOpen(true);
+    };
+
+    const handleFormSubmit = (transactionData) => {
+        if (editingTransaction) {
+            onUpdate(transactionData);
+        } else {
+            onAdd(transactionData);
+        }
+        setIsModalOpen(false);
+    };
+
+    return (
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-4 sm:p-6 lg:p-8 rounded-2xl shadow-lg animate-fade-in flex flex-col h-full`}>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                <div className="flex items-center gap-3">
+                    <ArrowDownCircle size={32} className="text-rose-400" />
+                    <h2 className={`text-2xl sm:text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>Saídas</h2>
+                </div>
+                <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 bg-[var(--primary-color)] text-white rounded-lg hover:bg-[var(--primary-color-hover)] transition-transform transform hover:scale-105 shadow-lg">
+                    <Plus size={20} />
+                    Adicionar Saída
+                </button>
+            </div>
+            <div className="overflow-auto flex-grow">
+                <table className="w-full text-left table-auto">
+                    <thead className={`border-b-2 ${theme === 'dark' ? 'border-[var(--color-slate-700)]' : 'border-[var(--color-slate-200)]'}`}><tr className={`text-sm ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>
+                        <th className="p-3">Descrição</th><th className="p-3 text-right">Valor Mensal</th>
+                        <th className="p-3 text-center">Progresso</th><th className="p-3 text-center">Status</th>
+                        <th className="p-3 text-center">Ações</th>
+                    </tr></thead>
+                    <tbody>
+                        {relevantTransactions.length === 0 ? (
+                            <tr><td colSpan={5} className={`text-center py-10 ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'}`}>Nenhuma saída registrada.</td></tr>
+                        ) : relevantTransactions.map(t => {
+                            const category = categories.find(c => c.id === t.categoryId);
+                            const monthlyAmount = t.expenseType === 'Parcelado' ? t.amount / t.installments : t.amount;
+                            const isFinished = (t.expenseType === 'Parcelado' && t.paidInstallments >= t.installments) || (t.expenseType === 'Variável' && t.paidInstallments >= 1);
+                            
+                            let dueDate = null;
+                            if (t.expenseType === 'Fixo' || t.expenseType === 'Fixo-Variável' || t.expenseType === 'Parcelado') {
+                                const startDate = new Date(t.date + 'T00:00:00');
+                                dueDate = new Date(startDate.getFullYear(), startDate.getMonth() + t.paidInstallments, startDate.getDate());
+                            }
+                            const isOverdue = dueDate && new Date() > dueDate && !isFinished && !t.isPaused;
+
+                            let statusText = t.expenseType;
+                            if(t.isPaused) statusText = "Pausado";
+                            else if(isFinished) statusText = "Pago";
+                            else if(isOverdue) statusText = "Atrasado";
+                            else if(t.expenseType === 'Parcelado') statusText = "Andamento";
+                            
+                            const canBeMarkedAsPaid = !t.isPaused && (!isFinished || t.expenseType === 'Fixo' || t.expenseType === 'Fixo-Variável');
+
+                            return (
+                                <tr key={t.id} className={`border-b ${theme === 'dark' ? 'border-[var(--color-slate-800)]' : 'border-[var(--color-slate-100)]'} transition-colors ${t.isPaused ? (theme === 'dark' ? 'bg-[var(--color-slate-800)]/60' : 'bg-[var(--color-slate-100)]/60') : (theme === 'dark' ? 'hover:bg-[var(--color-slate-700)]/50' : 'hover:bg-[var(--color-slate-50)]')} ${isOverdue ? (theme === 'dark' ? 'bg-rose-900/30' : 'bg-rose-100') : ''}`}>
+                                    <td className={`p-3 font-medium ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{t.description}<p className={`text-xs ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>{category?.name || 'Sem Categoria'}</p></td>
+                                    <td className="p-3 text-right font-semibold text-rose-400">{formatCurrency(monthlyAmount)}</td>
+                                    <td className={`p-3 text-center ${theme === 'dark' ? 'text-[var(--color-slate-300)]' : 'text-[var(--color-slate-600)]'}`}>
+                                        {t.expenseType === 'Parcelado' ? (
+                                            <div><span>{t.paidInstallments} / {t.installments}</span><p className={`text-xs ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'}`}>Falta: {formatCurrency((t.installments - t.paidInstallments) * monthlyAmount)}</p></div>
+                                        ) : t.expenseType === 'Variável' ? (isFinished ? 'Pago' : 'Pag. Único') : `Próx. Venc: ${dueDate ? dueDate.toLocaleDateString('pt-BR') : 'N/A'}`}
+                                    </td>
+                                    <td className="p-3 text-center">
+                                        <span className={`px-3 py-1 text-xs font-bold rounded-full ${
+                                            statusText === 'Pausado' ? (theme === 'dark' ? 'bg-[var(--color-slate-600)]/50 text-[var(--color-slate-400)]' : 'bg-[var(--color-slate-200)] text-[var(--color-slate-500)]') :
+                                            statusText === 'Pago' ? 'bg-emerald-500/20 text-emerald-400' :
+                                            statusText === 'Atrasado' ? 'bg-rose-500/20 text-rose-400' :
+                                            statusText === 'Andamento' ? 'bg-yellow-500/20 text-yellow-400' :
+                                            statusText === 'Fixo-Variável' ? 'bg-indigo-500/20 text-indigo-400' :
+                                            statusText === 'Fixo' ? 'bg-[var(--primary-color-bg)] text-[var(--primary-color)]' :
+                                            (theme === 'dark' ? 'bg-[var(--color-slate-500)]/20 text-[var(--color-slate-300)]' : 'bg-[var(--color-slate-200)] text-[var(--color-slate-600)]')
+                                        }`}>{statusText}</span>
+                                    </td>
+                                    <td className="p-3">
+                                        <div className="flex justify-center items-center">
+                                            {canBeMarkedAsPaid && <button onClick={() => onMarkAsPaid(t.id)} className={`p-2 text-emerald-400 ${theme === 'dark' ? 'hover:bg-emerald-500/20' : 'hover:bg-emerald-100'} rounded-md transition`} title="Marcar como pago"><CheckCircle size={18} /></button>}
+                                            <div className="relative actions-menu-container">
+                                                <button onClick={() => setOpenMenuId(openMenuId === t.id ? null : t.id)} className={`p-2 ${theme === 'dark' ? 'text-[var(--color-slate-400)] hover:text-white hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-500)] hover:text-[var(--color-slate-800)] hover:bg-[var(--color-slate-200)]'} rounded-md transition`}><MoreVertical size={18} /></button>
+                                                {openMenuId === t.id && (
+                                                    <div className={`absolute right-0 top-full mt-2 w-40 ${theme === 'dark' ? 'bg-[var(--color-slate-900)] border-[var(--color-slate-700)]' : 'bg-white border-[var(--color-slate-200)]'} border rounded-lg shadow-xl z-10 animate-fade-in-fast`}>
+                                                        <button onClick={() => { handleEditClick(t); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-700)] hover:bg-[var(--color-slate-100)]'} hover:text-[var(--primary-color)] rounded-t-lg transition`}><Edit size={16} /> Editar</button>
+                                                        <button onClick={() => { onDuplicate(t.id); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-700)] hover:bg-[var(--color-slate-100)]'} hover:text-[var(--primary-color)] transition`}><Copy size={16} /> Duplicar</button>
+                                                        <button onClick={() => { onTogglePause(t.id); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-700)] hover:bg-[var(--color-slate-100)]'} hover:text-[var(--primary-color)] transition`}>{t.isPaused ? <Play size={16}/> : <Pause size={16}/>} {t.isPaused ? 'Reativar' : 'Pausar'}</button>
+                                                        <div className={`w-full h-px ${theme === 'dark' ? 'bg-[var(--color-slate-700)]' : 'bg-[var(--color-slate-200)]'} my-1`}></div>
+                                                        <button onClick={() => { onDelete(t.id); setOpenMenuId(null); }} className={`w-full text-left flex items-center gap-3 px-3 py-2 text-rose-500 hover:bg-rose-500/10 rounded-b-lg transition`}><Trash2 size={16} /> Excluir</button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        </div>
+                                    </td>
+                                </tr>
+                            );
+                        })}
+                    </tbody>
+                </table>
+            </div>
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} theme={theme}>
+                <ExpenseForm onSubmit={handleFormSubmit} onCancel={() => setIsModalOpen(false)} transactionData={editingTransaction} categories={categories} theme={theme} />
+            </Modal>
+        </div>
+    );
+};
+
+const CategoriesPage = ({ data, onAdd, onUpdate, onDelete, theme }) => {
+    const { categories } = data;
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editingCategory, setEditingCategory] = useState(null);
+    const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+    const [categoryToDelete, setCategoryToDelete] = useState(null);
+
+    const handleAddClick = () => {
+        setEditingCategory(null);
+        setIsModalOpen(true);
+    };
+
+    const handleEditClick = (category) => {
+        setEditingCategory(category);
+        setIsModalOpen(true);
+    };
+
+    const handleDeleteRequest = (id) => {
+        setCategoryToDelete(id);
+        setIsConfirmOpen(true);
+    };
+
+    const confirmDelete = () => {
+        onDelete(categoryToDelete);
+        setIsConfirmOpen(false);
+        setCategoryToDelete(null);
+    };
+
+    const handleFormSubmit = (categoryData) => {
+        if (editingCategory) {
+            onUpdate(categoryData);
+        } else {
+            onAdd(categoryData);
+        }
+        setIsModalOpen(false);
+    };
+
+    return (
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-4 sm:p-6 lg:p-8 rounded-2xl shadow-lg animate-fade-in flex flex-col h-full`}>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                <div className="flex items-center gap-3">
+                    <Folder size={32} className="text-[var(--primary-color)]" />
+                    <h2 className={`text-2xl sm:text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>Categorias de Despesa</h2>
+                </div>
+                <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 bg-[var(--primary-color)] text-white rounded-lg hover:bg-[var(--primary-color-hover)] transition-transform transform hover:scale-105 shadow-lg">
+                    <Plus size={20} />
+                    Nova Categoria
+                </button>
+            </div>
+            
+            <div className="overflow-auto flex-grow">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                    {categories.length === 0 ? (
+                         <p className={`text-center ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'} py-10 col-span-full`}>Nenhuma categoria criada.</p>
+                    ) : categories.map(cat => (
+                        <div key={cat.id} className={`${theme === 'dark' ? 'bg-[var(--color-slate-700)]/50' : 'bg-[var(--color-slate-100)]'} p-4 rounded-lg flex justify-between items-center`}>
+                            <div className="flex items-center gap-3">
+                                <div className="w-3 h-3 rounded-full" style={{ backgroundColor: cat.color }}></div>
+                                <span className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{cat.name}</span>
+                            </div>
+                            <div className="flex items-center gap-2">
+                                <button onClick={() => handleEditClick(cat)} className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} hover:text-[var(--primary-color)] transition`}><Edit size={18} /></button>
+                                <button onClick={() => handleDeleteRequest(cat.id)} className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} hover:text-rose-400 transition`}><Trash2 size={18} /></button>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} theme={theme}>
+                <CategoryForm
+                    onSubmit={handleFormSubmit}
+                    onCancel={() => setIsModalOpen(false)}
+                    categoryData={editingCategory}
+                    theme={theme}
+                />
+            </Modal>
+            <ConfirmationModal
+                isOpen={isConfirmOpen}
+                onClose={() => setIsConfirmOpen(false)}
+                onConfirm={confirmDelete}
+                title="Excluir Categoria"
+                message="Tem certeza que deseja excluir esta categoria? As despesas associadas perderão sua categoria."
+                theme={theme}
+            />
+        </div>
+    );
+}
+
+const ClientsPage = ({ data, onAdd, onUpdate, onDelete, onUpdateContract, theme }) => {
+    const { clients } = data;
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editingClient, setEditingClient] = useState(null);
+    const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+    const [clientToDelete, setClientToDelete] = useState(null);
+    const fileInputRef = useRef(null);
+    const [targetClientIdForUpload, setTargetClientIdForUpload] = useState(null);
+
+    const handleAddClick = () => {
+        setEditingClient(null);
+        setIsModalOpen(true);
+    };
+
+    const handleEditClick = (client) => {
+        setEditingClient(client);
+        setIsModalOpen(true);
+    };
+
+    const handleDeleteRequest = (id) => {
+        setClientToDelete(id);
+        setIsConfirmOpen(true);
+    };
+
+    const confirmDelete = () => {
+        onDelete(clientToDelete);
+        setIsConfirmOpen(false);
+        setClientToDelete(null);
+    };
+
+    const handleFormSubmit = (clientData) => {
+        if (editingClient) {
+            onUpdate(clientData);
+        } else {
+            onAdd(clientData);
+        }
+        setIsModalOpen(false);
+    };
+
+    const handleUploadClick = (clientId) => {
+        setTargetClientIdForUpload(clientId);
+        fileInputRef.current?.click();
+    };
+
+    const handleFileChange = (event) => {
+        const file = event.target.files[0];
+        if (file && targetClientIdForUpload && file.type === 'application/pdf') {
+            const reader = new FileReader();
+            reader.onloadend = () => {
+                onUpdateContract(targetClientIdForUpload, reader.result, file.name);
+            };
+            reader.readAsDataURL(file);
+        }
+        event.target.value = null; 
+    };
+
+    const handleDownload = (client) => {
+        const link = document.createElement('a');
+        link.href = client.contractUrl;
+        link.download = client.contractName || 'contrato.pdf';
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    };
+
+    return (
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-4 sm:p-6 lg:p-8 rounded-2xl shadow-lg animate-fade-in flex flex-col h-full`}>
+            <input type="file" accept=".pdf" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                <div className="flex items-center gap-3">
+                    <Users size={32} className="text-[var(--primary-color)]" />
+                    <h2 className={`text-2xl sm:text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>Clientes</h2>
+                </div>
+                <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 bg-[var(--primary-color)] text-white rounded-lg hover:bg-[var(--primary-color-hover)] transition-transform transform hover:scale-105 shadow-lg">
+                    <Plus size={20} />
+                    Novo Cliente
+                </button>
+            </div>
+            
+            <div className="overflow-auto flex-grow">
+                <div className="space-y-4">
+                    {clients.length === 0 ? (
+                         <p className={`text-center ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'} py-10`}>Nenhum cliente cadastrado.</p>
+                    ) : clients.map(client => (
+                        <div key={client.id} className={`${theme === 'dark' ? 'bg-[var(--color-slate-700)]/50' : 'bg-[var(--color-slate-100)]'} p-4 rounded-lg flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4`}>
+                            <div className="flex items-center gap-3 flex-grow">
+                                <Briefcase size={20} className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} flex-shrink-0`} />
+                                <span className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{client.name}</span>
+                            </div>
+                            <div className="w-full sm:w-auto flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+                                {client.contractUrl ? (
+                                    <>
+                                        <div className={`flex items-center gap-2 text-sm ${theme === 'dark' ? 'text-[var(--color-slate-300)] bg-[var(--color-slate-600)]/50' : 'text-[var(--color-slate-600)] bg-[var(--color-slate-200)]'} px-3 py-1 rounded-md`}>
+                                            <FileText size={16} className="text-emerald-400" />
+                                            <span className="truncate max-w-[150px]">{client.contractName}</span>
+                                        </div>
+                                        <div className="flex items-center gap-1">
+                                            <a href={client.contractUrl} target="_blank" rel="noopener noreferrer" className={`p-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:text-white hover:bg-[var(--color-slate-600)]' : 'text-[var(--color-slate-500)] hover:text-[var(--color-slate-800)] hover:bg-[var(--color-slate-200)]'} rounded-md transition`} title="Visualizar Contrato"><Eye size={18}/></a>
+                                            <button onClick={() => handleDownload(client)} className={`p-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:text-white hover:bg-[var(--color-slate-600)]' : 'text-[var(--color-slate-500)] hover:text-[var(--color-slate-800)] hover:bg-[var(--color-slate-200)]'} rounded-md transition`} title="Baixar Contrato"><Download size={18}/></button>
+                                            <button onClick={() => handleUploadClick(client.id)} className={`p-2 ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:text-white hover:bg-[var(--color-slate-600)]' : 'text-[var(--color-slate-500)] hover:text-[var(--color-slate-800)] hover:bg-[var(--color-slate-200)]'} rounded-md transition`} title="Substituir Contrato"><Upload size={18}/></button>
+                                        </div>
+                                    </>
+                                ) : (
+                                    <button onClick={() => handleUploadClick(client.id)} className={`flex items-center justify-center gap-2 px-3 py-1.5 ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-[var(--color-slate-300)] hover:bg-[var(--color-slate-500)] hover:text-white' : 'bg-[var(--color-slate-200)] text-[var(--color-slate-600)] hover:bg-[var(--color-slate-300)] hover:text-[var(--color-slate-800)]'} rounded-lg transition text-sm`}>
+                                        <Upload size={16} /> Anexar Contrato
+                                    </button>
+                                )}
+                                <div className={`flex items-center gap-1 border-t sm:border-t-0 sm:border-l ${theme === 'dark' ? 'border-[var(--color-slate-600)]' : 'border-[var(--color-slate-200)]'} pt-2 sm:pt-0 sm:pl-2 mt-2 sm:mt-0`}>
+                                    <button onClick={() => handleEditClick(client)} className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} hover:text-[var(--primary-color)] transition p-2`}><Edit size={18} /></button>
+                                    <button onClick={() => handleDeleteRequest(client.id)} className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} hover:text-rose-400 transition p-2`}><Trash2 size={18} /></button>
+                                </div>
+                            </div>
+                        </div>
+                    ))}
+                </div>
+            </div>
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} theme={theme}>
+                <ClientForm
+                    onSubmit={handleFormSubmit}
+                    onCancel={() => setIsModalOpen(false)}
+                    clientData={editingClient}
+                    theme={theme}
+                />
+            </Modal>
+            <ConfirmationModal
+                isOpen={isConfirmOpen}
+                onClose={() => setIsConfirmOpen(false)}
+                onConfirm={confirmDelete}
+                title="Excluir Cliente"
+                message="Tem certeza que deseja excluir este cliente? As receitas associadas a ele não serão excluídas, mas perderão o vínculo."
+                theme={theme}
+            />
+        </div>
+    );
+}
+
+
+const PlanningPage = ({ data, onAdd, onUpdate, onDelete, theme }) => {
+    const { transactions, categories, destinations } = data;
+    const [isModalOpen, setIsModalOpen] = useState(false);
+    const [editingDestination, setEditingDestination] = useState(null);
+    const [isConfirmOpen, setIsConfirmOpen] = useState(false);
+    const [destinationToDelete, setDestinationToDelete] = useState(null);
+
+    const totalIncome = useMemo(() => 
+        transactions.filter(t => t.type === 'income').reduce((sum, t) => sum + t.amount, 0),
+    [transactions]);
+    
+    const totalAllocatedPercentage = useMemo(() => 
+        destinations.reduce((sum, d) => sum + d.percentage, 0),
+    [destinations]);
+
+    const handleAddClick = () => {
+        setEditingDestination(null);
+        setIsModalOpen(true);
+    };
+
+    const handleEditClick = (destination) => {
+        setEditingDestination(destination);
+        setIsModalOpen(true);
+    };
+
+    const handleDeleteRequest = (id) => {
+        setDestinationToDelete(id);
+        setIsConfirmOpen(true);
+    };
+
+    const confirmDelete = () => {
+        onDelete(destinationToDelete);
+        setIsConfirmOpen(false);
+        setDestinationToDelete(null);
+    };
+
+    const handleFormSubmit = (destinationData) => {
+        if (editingDestination) {
+            onUpdate(destinationData);
+        } else {
+            onAdd(destinationData);
+        }
+        setIsModalOpen(false);
+    };
+
+    const DestinationCard = ({ destination }) => {
+        const budgetedAmount = totalIncome * (destination.percentage / 100);
+        const spentAmount = useMemo(() => 
+            transactions
+                .filter(t => t.type === 'expense' && destination.linkedCategoryIds.includes(t.categoryId))
+                .reduce((sum, t) => sum + t.amount, 0),
+        [transactions, destination.linkedCategoryIds]);
+        
+        const remainingAmount = budgetedAmount - spentAmount;
+        const progress = budgetedAmount > 0 ? (spentAmount / budgetedAmount) * 100 : 0;
+
+        return (
+            <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-700)]/50' : 'bg-[var(--color-slate-100)]'} p-5 rounded-xl flex flex-col`}>
+                <div className="flex justify-between items-start mb-2">
+                    <h4 className={`text-lg font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{destination.name}</h4>
+                    <div className="flex items-center gap-2">
+                        <button onClick={() => handleEditClick(destination)} className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} hover:text-[var(--primary-color)] transition p-1`}><Settings size={16} /></button>
+                        <button onClick={() => handleDeleteRequest(destination.id)} className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} hover:text-rose-400 transition p-1`}><Trash2 size={16} /></button>
+                    </div>
+                </div>
+                <div className="text-2xl font-bold text-[var(--primary-color)] mb-4">{destination.percentage}%</div>
+                
+                <div className="space-y-2 text-sm mb-4 flex-grow">
+                    <div className="flex justify-between">
+                        <span className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>Orçado:</span>
+                        <span className={`font-semibold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>{formatCurrency(budgetedAmount)}</span>
+                    </div>
+                     <div className="flex justify-between">
+                        <span className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>Gasto:</span>
+                        <span className="font-semibold text-rose-400">{formatCurrency(spentAmount)}</span>
+                    </div>
+                     <div className="flex justify-between">
+                        <span className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'}`}>Saldo:</span>
+                        <span className={`font-semibold ${remainingAmount >= 0 ? 'text-emerald-400' : 'text-yellow-400'}`}>{formatCurrency(remainingAmount)}</span>
+                    </div>
+                </div>
+
+                <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-600)]' : 'bg-[var(--color-slate-200)]'} w-full rounded-full h-2.5`}>
+                    <div className="bg-[var(--primary-color)] h-2.5 rounded-full" style={{ width: `${Math.min(progress, 100)}%` }}></div>
+                </div>
+            </div>
+        );
+    };
+
+    return (
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-4 sm:p-6 lg:p-8 rounded-2xl shadow-lg animate-fade-in flex flex-col h-full`}>
+            <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-6 gap-4">
+                <div className="flex items-center gap-3">
+                    <Target size={32} className="text-[var(--primary-color)]" />
+                    <h2 className={`text-2xl sm:text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>Planejamento Orçamentário</h2>
+                </div>
+                <button onClick={handleAddClick} className="flex items-center gap-2 px-4 py-2 bg-[var(--primary-color)] text-white rounded-lg hover:bg-[var(--primary-color-hover)] transition-transform transform hover:scale-105 shadow-lg">
+                    <Plus size={20} />
+                    Novo Destino
+                </button>
+            </div>
+            <div className="overflow-auto flex-grow space-y-6">
+                <div className={`grid grid-cols-1 md:grid-cols-2 gap-6 ${theme === 'dark' ? 'bg-[var(--color-slate-900)]/50' : 'bg-[var(--color-slate-50)]'} p-6 rounded-xl`}>
+                    <div>
+                        <p className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} text-sm`}>Receita Total (Mês)</p>
+                        <p className="text-2xl font-bold text-emerald-400">{formatCurrency(totalIncome)}</p>
+                    </div>
+                     <div>
+                        <p className={`${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} text-sm`}>Total Alocado</p>
+                        <p className={`text-2xl font-bold ${totalAllocatedPercentage > 100 ? 'text-rose-400' : (theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]')}`}>{totalAllocatedPercentage.toFixed(1)}%</p>
+                        {totalAllocatedPercentage > 100 && <p className="text-xs text-rose-400">Atenção: A soma dos percentuais ultrapassou 100%.</p>}
+                        {totalAllocatedPercentage < 100 && <p className="text-xs text-yellow-400">Atenção: { (100 - totalAllocatedPercentage).toFixed(1) }% da receita ainda não foi alocada.</p>}
+                    </div>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
+                    {destinations.map(dest => <DestinationCard key={dest.id} destination={dest} theme={theme} />)}
+                </div>
+            </div>
+
+            <Modal isOpen={isModalOpen} onClose={() => setIsModalOpen(false)} theme={theme}>
+                <DestinationForm
+                    onSubmit={handleFormSubmit}
+                    onCancel={() => setIsModalOpen(false)}
+                    destinationData={editingDestination}
+                    allCategories={categories}
+                    theme={theme}
+                />
+            </Modal>
+            <ConfirmationModal
+                isOpen={isConfirmOpen}
+                onClose={() => setIsConfirmOpen(false)}
+                onConfirm={confirmDelete}
+                title="Excluir Destino"
+                message="Tem certeza que deseja excluir este destino orçamentário? Esta ação não pode ser desfeita."
+                theme={theme}
+            />
+        </div>
+    );
+}
+
+const ProfilePage = ({ userProfile, onUpdate, onUpdateLogo, onRemoveLogo, theme }) => {
+    const [profile, setProfile] = useState(userProfile);
+    const [showSavedMessage, setShowSavedMessage] = useState(false);
+    const logoInputRef = useRef(null);
+
+    useEffect(() => {
+        setProfile(userProfile);
+    }, [userProfile]);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setProfile(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onUpdate(profile);
+        setShowSavedMessage(true);
+        setTimeout(() => setShowSavedMessage(false), 3000);
+    };
+
+    const handleLogoClick = () => {
+        logoInputRef.current?.click();
+    };
+
+    const handleLogoChange = (e) => {
+        const file = e.target.files[0];
+        if (file && file.type.startsWith('image/') && file.size <= 2 * 1024 * 1024) { // 2MB limit
+            onUpdateLogo(file);
+        } else if (file) {
+            alert("Por favor, selecione um arquivo de imagem (PNG, JPG, etc.) com no máximo 2MB.");
+        }
+        e.target.value = null;
+    };
+
+    return (
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)]' : 'bg-white border border-[var(--color-slate-200)]'} p-4 sm:p-6 lg:p-8 rounded-2xl shadow-lg animate-fade-in`}>
+            <div className="flex items-center gap-3 mb-6">
+                <User size={32} className="text-[var(--primary-color)]" />
+                <h2 className={`text-2xl sm:text-3xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'}`}>Meu Perfil</h2>
+            </div>
+            <form onSubmit={handleSubmit} className="space-y-6 max-w-2xl mx-auto">
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-1`}>Logo da Empresa</label>
+                    <p className={`text-xs ${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'} mb-2`}>Tamanho máximo: 2MB. O tema do app será ajustado para combinar com a logo.</p>
+                    <div className="flex items-center gap-4">
+                        <div
+                            className={`w-20 h-20 rounded-lg flex items-center justify-center cursor-pointer ${theme === 'dark' ? 'hover:bg-[var(--color-slate-700)]' : 'hover:bg-[var(--color-slate-100)]'} transition-colors`}
+                            onClick={handleLogoClick}
+                        >
+                            {profile.companyLogo ? (
+                                <img src={profile.companyLogo} alt="Logo da Empresa" className="w-full h-full object-contain rounded-lg p-1" />
+                            ) : (
+                                <div className={`w-full h-full flex items-center justify-center rounded-lg ${theme === 'dark' ? 'bg-[var(--color-slate-700)]' : 'bg-[var(--color-slate-100)]'}`}>
+                                    <Upload size={32} className={`${theme === 'dark' ? 'text-[var(--color-slate-500)]' : 'text-[var(--color-slate-400)]'}`} />
+                                </div>
+                            )}
+                        </div>
+                        <div className="flex flex-col gap-2">
+                            <button type="button" onClick={handleLogoClick} className={`px-4 py-2 ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-white hover:bg-[var(--color-slate-500)]' : 'bg-[var(--color-slate-200)] text-[var(--color-slate-800)] hover:bg-[var(--color-slate-300)]'} rounded-lg transition text-sm`}>
+                                Alterar Logo
+                            </button>
+                             {profile.companyLogo && (
+                                <button type="button" onClick={onRemoveLogo} className={`px-4 py-2 text-rose-500 hover:bg-rose-500/10 rounded-lg transition text-sm`}>
+                                    Remover Logo
+                                </button>
+                            )}
+                        </div>
+                        <input
+                            type="file"
+                            accept="image/*"
+                            ref={logoInputRef}
+                            onChange={handleLogoChange}
+                            className="hidden"
+                        />
+                    </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Nome Completo</label>
+                        <input type="text" name="fullName" value={profile.fullName} onChange={handleChange} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} />
+                    </div>
+                    <div>
+                        <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Email</label>
+                        <input type="email" name="email" value={profile.email} onChange={handleChange} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} />
+                    </div>
+                </div>
+                 <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                        <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Nome da Empresa</label>
+                        <input type="text" name="companyName" value={profile.companyName} onChange={handleChange} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} />
+                    </div>
+                    <div>
+                        <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Data de Abertura da Empresa</label>
+                        <input type="date" name="companyStartDate" value={profile.companyStartDate} onChange={handleChange} className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] text-white border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] text-[var(--color-slate-900)] border-[var(--color-slate-300)]'} rounded-lg p-3 border focus:ring-2 focus:ring-[var(--primary-color)] focus:border-[var(--primary-color)] transition`} />
+                    </div>
+                </div>
+                <div>
+                    <label className={`block text-sm font-medium ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-600)]'} mb-2`}>Senha</label>
+                    <div className="flex items-center gap-4">
+                        <input type="password" value="••••••••" readOnly className={`w-full ${theme === 'dark' ? 'bg-[var(--color-slate-700)] border-[var(--color-slate-600)]' : 'bg-[var(--color-slate-100)] border-[var(--color-slate-300)]'} text-white rounded-lg p-3 border cursor-not-allowed`} />
+                        <button type="button" className={`px-4 py-2.5 ${theme === 'dark' ? 'bg-[var(--color-slate-600)] text-white hover:bg-[var(--color-slate-500)]' : 'bg-[var(--color-slate-200)] text-[var(--color-slate-800)] hover:bg-[var(--color-slate-300)]'} rounded-lg transition whitespace-nowrap`}>Alterar Senha</button>
+                    </div>
+                </div>
+                <div className="flex justify-end items-center gap-4 pt-4">
+                    {showSavedMessage && <span className="text-emerald-400 animate-fade-in">Alterações salvas!</span>}
+                    <button type="submit" className="px-6 py-2 rounded-lg bg-[var(--primary-color)] text-white hover:bg-[var(--primary-color-hover)] font-semibold transition">Salvar Alterações</button>
+                </div>
+            </form>
+        </div>
+    );
+};
+
+
+// --- COMPONENTE PRINCIPAL ---
+
+export default function App() {
+    const [view, setView] = useState('dashboard');
+    const { state: data, setState: setData, undo, redo, resetHistory, canUndo, canRedo } = useHistoryState(initialData);
+    const [theme, setTheme] = useState('dark'); // 'dark' or 'light'
+    
+    const [isDeleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
+    const [transactionToDelete, setTransactionToDelete] = useState(null);
+    const [isImportConfirmOpen, setImportConfirmOpen] = useState(false);
+    const [importedData, setImportedData] = useState(null);
+    const fileInputRef = useRef(null);
+
+    const toggleTheme = () => {
+        setTheme(prevTheme => prevTheme === 'dark' ? 'light' : 'dark');
+    };
+
+    const handleDeleteRequest = (id) => {
+        setTransactionToDelete(id);
+        setDeleteConfirmOpen(true);
+    };
+
+    const confirmDeleteTransaction = () => {
+        if (transactionToDelete) {
+            handleDeleteTransaction(transactionToDelete);
+        }
+        setDeleteConfirmOpen(false);
+        setTransactionToDelete(null);
+    };
+
+    const handleAddTransaction = (transaction) => {
+        setData(prev => ({ ...prev, transactions: [...prev.transactions, transaction] }));
+    };
+    const handleUpdateTransaction = (updatedTransaction) => {
+        setData(prev => ({ ...prev, transactions: prev.transactions.map(t => t.id === updatedTransaction.id ? updatedTransaction : t) }));
+    };
+    const handleDeleteTransaction = (id) => {
+        setData(prev => ({ ...prev, transactions: prev.transactions.filter(t => t.id !== id) }));
+    };
+
+    const handleMarkIncomeAsReceived = (id) => {
+        setData(prev => ({
+            ...prev,
+            transactions: prev.transactions.map(t => {
+                if(t.id === id && t.type === 'income' && t.paidInstallments < t.installments) {
+                    return {...t, paidInstallments: t.paidInstallments + 1};
+                }
+                return t;
+            })
+        }));
+    };
+    const handleToggleIncomePause = (id) => {
+        setData(prev => ({
+            ...prev,
+            transactions: prev.transactions.map(t => t.id === id && t.type === 'income' ? {...t, isPaused: !t.isPaused} : t)
+        }));
+    };
+
+    const handleMarkExpenseAsPaid = (id) => {
+        setData(prev => ({
+            ...prev,
+            transactions: prev.transactions.map(t => {
+                if (t.id === id && t.type === 'expense') {
+                    if (t.expenseType === 'Variável') {
+                        return { ...t, paidInstallments: 1 };
+                    }
+                    if (t.expenseType === 'Parcelado' && t.paidInstallments < t.installments) {
+                        return { ...t, paidInstallments: t.paidInstallments + 1 };
+                    }
+                    if (t.expenseType === 'Fixo' || t.expenseType === 'Fixo-Variável') {
+                        const newHistory = [...(t.paymentHistory || []), { date: new Date().toISOString().split('T')[0], amount: t.amount }];
+                        return { ...t, paidInstallments: t.paidInstallments + 1, paymentHistory: newHistory };
+                    }
+                }
+                return t;
+            })
+        }));
+    };
+    const handleToggleExpensePause = (id) => {
+        setData(prev => ({
+            ...prev,
+            transactions: prev.transactions.map(t => t.id === id && t.type === 'expense' ? {...t, isPaused: !t.isPaused} : t)
+        }));
+    };
+
+    const handleDuplicateTransaction = (id) => {
+        const transactionToDuplicate = data.transactions.find(t => t.id === id);
+        if(transactionToDuplicate) {
+            const newTransaction = {
+                ...transactionToDuplicate,
+                id: Date.now(),
+                description: `${transactionToDuplicate.description} (Cópia)`,
+                paidInstallments: 0, 
+                paymentHistory: [],
+                date: new Date().toISOString().split('T')[0],
+            };
+            setData(prev => ({...prev, transactions: [...prev.transactions, newTransaction]}));
+        }
+    };
+
+
+    const handleAddCategory = (category) => {
+        setData(prev => ({ ...prev, categories: [...prev.categories, category] }));
+    };
+    const handleUpdateCategory = (updatedCategory) => {
+        setData(prev => ({ ...prev, categories: prev.categories.map(c => c.id === updatedCategory.id ? updatedCategory : c) }));
+    };
+    const handleDeleteCategory = (id) => {
+        setData(prev => ({
+            ...prev,
+            categories: prev.categories.filter(c => c.id !== id),
+            transactions: prev.transactions.map(t => t.categoryId === id ? { ...t, categoryId: undefined } : t),
+            destinations: prev.destinations.map(d => ({ ...d, linkedCategoryIds: d.linkedCategoryIds.filter(catId => catId !== id) }))
+        }));
+    };
+
+    const handleAddClient = (client) => {
+        setData(prev => ({ ...prev, clients: [...prev.clients, {...client, contractUrl: null, contractName: null}]}));
+    };
+    const handleUpdateClient = (updatedClient) => {
+        setData(prev => ({ ...prev, clients: prev.clients.map(c => c.id === updatedClient.id ? {...c, name: updatedClient.name} : c)}));
+    };
+    const handleDeleteClient = (id) => {
+        setData(prev => ({
+            ...prev,
+            clients: prev.clients.filter(c => c.id !== id),
+            transactions: prev.transactions.map(t => t.clientId === id ? { ...t, clientId: undefined } : t),
+        }));
+    };
+    const handleUpdateClientContract = (clientId, contractUrl, contractName) => {
+        setData(prev => ({
+            ...prev,
+            clients: prev.clients.map(c => 
+                c.id === clientId ? { ...c, contractUrl, contractName } : c
+            )
+        }));
+    };
+
+    const handleAddDestination = (destination) => {
+        setData(prev => ({ ...prev, destinations: [...prev.destinations, destination] }));
+    };
+    const handleUpdateDestination = (updatedDestination) => {
+        setData(prev => ({ ...prev, destinations: prev.destinations.map(d => d.id === updatedDestination.id ? updatedDestination : d) }));
+    };
+    const handleDeleteDestination = (id) => {
+        setData(prev => ({ ...prev, destinations: prev.destinations.filter(d => d.id !== id) }));
+    };
+    
+    const handleUpdateUserProfile = (newProfile) => {
+        setData(prev => ({...prev, userProfile: newProfile}));
+    };
+    
+    const getDominantColor = (img) => {
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d', { willReadFrequently: true });
+        canvas.width = img.width;
+        canvas.height = img.height;
+        ctx.drawImage(img, 0, 0);
+
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const data = imageData.data;
+        const colorCount = {};
+        let maxCount = 0;
+        let dominantRgb = null;
+
+        for (let i = 0; i < data.length; i += 4) {
+            const r = data[i], g = data[i + 1], b = data[i + 2], a = data[i + 3];
+            if (a < 125 || (r > 240 && g > 240 && b > 240) || (r < 15 && g < 15 && b < 15)) continue;
+            const rgb = `${r},${g},${b}`;
+            colorCount[rgb] = (colorCount[rgb] || 0) + 1;
+            if (colorCount[rgb] > maxCount) {
+                maxCount = colorCount[rgb];
+                dominantRgb = rgb.split(',').map(Number);
+            }
+        }
+
+        if (!dominantRgb) return '#4ba5ff';
+
+        let dominantHex = `#${dominantRgb.map(c => c.toString(16).padStart(2, '0')).join('')}`;
+        
+        let contrast = getContrast(dominantHex, '#FFFFFF');
+        while (contrast < 4.5) {
+            dominantHex = adjustLightness(dominantHex, -5);
+            contrast = getContrast(dominantHex, '#FFFFFF');
+            if (dominantHex === '#000000') break;
+        }
+
+        return dominantHex;
+    };
+
+    const handleUpdateUserLogo = (file) => {
+        const reader = new FileReader();
+        reader.onloadend = () => {
+            const base64String = reader.result;
+            const img = new Image();
+            img.src = base64String;
+            img.onload = () => {
+                const dominantColor = getDominantColor(img);
+                setData(prev => ({
+                    ...prev,
+                    userProfile: {
+                        ...prev.userProfile,
+                        companyLogo: base64String,
+                        themeColor: dominantColor,
+                    }
+                }));
+            };
+        };
+        reader.readAsDataURL(file);
+    };
+    
+    const handleRemoveUserLogo = () => {
+        setData(prev => ({
+            ...prev,
+            userProfile: {
+                ...prev.userProfile,
+                companyLogo: null,
+                themeColor: '#4ba5ff' // Reset to default color
+            }
+        }));
+    };
+
+    const handleExportData = () => {
+        const jsonData = JSON.stringify(data, null, 2);
+        const blob = new Blob([jsonData], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        const now = new Date();
+        const timestamp = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}_${String(now.getHours()).padStart(2, '0')}-${String(now.getMinutes()).padStart(2, '0')}`;
+        link.download = `dados-gestor-caixa-${timestamp}.json`;
+        link.href = url;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
+    };
+
+    const handleImportClick = () => {
+        fileInputRef.current?.click();
+    };
+
+    const handleFileChange = (event) => {
+        const file = event.target.files[0];
+        if (!file) return;
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            try {
+                const text = e.target.result;
+                const parsedData = JSON.parse(text);
+                if (parsedData && parsedData.transactions && parsedData.categories && parsedData.clients && parsedData.destinations && parsedData.userProfile) {
+                    setImportedData(parsedData);
+                    setImportConfirmOpen(true);
+                } else {
+                    alert('Arquivo inválido. A estrutura dos dados não corresponde ao esperado.');
+                }
+            } catch (error) {
+                console.error("Erro ao importar dados:", error);
+                alert('Ocorreu um erro ao ler o arquivo. Verifique se é um JSON válido.');
+            }
+        };
+        reader.readAsText(file);
+        event.target.value = null;
+    };
+    
+    const confirmImportData = () => {
+        if (importedData) {
+            resetHistory(importedData);
+        }
+        setImportConfirmOpen(false);
+        setImportedData(null);
+    };
+
+
+    const renderView = () => {
+        const props = { data, theme, onAdd: handleAddTransaction, onUpdate: handleUpdateTransaction, onDelete: handleDeleteRequest };
+        switch (view) {
+            case 'dashboard': return <Dashboard data={data} theme={theme} />;
+            case 'income': return <IncomePage {...props} onMarkAsReceived={handleMarkIncomeAsReceived} onTogglePause={handleToggleIncomePause} onDuplicate={handleDuplicateTransaction} />;
+            case 'expenses': return <ExpensesPage {...props} onMarkAsPaid={handleMarkExpenseAsPaid} onTogglePause={handleToggleExpensePause} onDuplicate={handleDuplicateTransaction} />;
+            case 'categories': return <CategoriesPage data={data} theme={theme} onAdd={handleAddCategory} onUpdate={handleUpdateCategory} onDelete={handleDeleteCategory} />;
+            case 'clients': return <ClientsPage data={data} theme={theme} onAdd={handleAddClient} onUpdate={handleUpdateClient} onDelete={handleDeleteClient} onUpdateContract={handleUpdateClientContract} />;
+            case 'planning': return <PlanningPage data={data} theme={theme} onAdd={handleAddDestination} onUpdate={handleUpdateDestination} onDelete={handleDeleteDestination} />;
+            case 'profile': return <ProfilePage userProfile={data.userProfile} theme={theme} onUpdate={handleUpdateUserProfile} onUpdateLogo={handleUpdateUserLogo} onRemoveLogo={handleRemoveUserLogo} />;
+            default: return <Dashboard data={data} theme={theme} />;
+        }
+    };
+
+    const NavButton = ({ targetView, icon: Icon, label }) => {
+        const isActive = view === targetView;
+        return (
+            <button
+                onClick={() => setView(targetView)}
+                className={`flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 py-2 rounded-lg transition-colors w-full text-left ${
+                    isActive ? 'bg-[var(--primary-color)] text-white font-semibold' : (theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-600)] hover:bg-[var(--color-slate-200)]')
+                }`}
+            >
+                <Icon size={22} />
+                <span className="hidden sm:inline">{label}</span>
+            </button>
+        );
+    };
+
+    const cssTheme = useMemo(() => generateThemeCss(data.userProfile.themeColor), [data.userProfile.themeColor]);
+
+    return (
+        <div className={`${theme === 'dark' ? 'bg-[var(--color-slate-900)] text-[var(--color-slate-300)]' : 'bg-[var(--color-slate-50)] text-[var(--color-slate-600)]'} min-h-screen font-sans`}>
+            <style>{`
+                ${cssTheme}
+                @keyframes fade-in { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+                .animate-fade-in { animation: fade-in 0.5s ease-out forwards; }
+                @keyframes fade-in-fast { from { opacity: 0; } to { opacity: 1; } }
+                .animate-fade-in-fast { animation: fade-in-fast 0.2s ease-out forwards; }
+                button:disabled { cursor: not-allowed; opacity: 0.5; }
+            `}</style>
+            <input type="file" accept=".json" ref={fileInputRef} onChange={handleFileChange} className="hidden" />
+
+            <div className="flex flex-col lg:flex-row">
+                <nav className={`${theme === 'dark' ? 'bg-[var(--color-slate-800)] border-[var(--color-slate-700)]' : 'bg-white border-[var(--color-slate-200)]'} lg:min-h-screen lg:w-64 p-4 lg:p-6 border-b lg:border-r flex flex-col`}>
+                    <div>
+                        <div className="flex items-center gap-3 mb-8">
+                            <div className="p-1 rounded-lg flex-shrink-0 w-10 h-10 flex items-center justify-center">
+                                {data.userProfile.companyLogo ? (
+                                    <img src={data.userProfile.companyLogo} alt="Logo" className="w-full h-full object-contain" />
+                                ) : (
+                                    <div className="w-full h-full rounded-md bg-[var(--primary-color)] flex items-center justify-center">
+                                       <Briefcase size={24} className="text-white" />
+                                    </div>
+                                )}
+                            </div>
+                            <h1 className={`text-xl font-bold ${theme === 'dark' ? 'text-white' : 'text-[var(--color-slate-800)]'} hidden sm:block`}>Gestor Caixa</h1>
+                        </div>
+                        <div className="space-y-3">
+                            <NavButton targetView="dashboard" icon={Home} label="Dashboard" />
+                            <NavButton targetView="planning" icon={Target} label="Planejamento" />
+                            <NavButton targetView="income" icon={ArrowUpCircle} label="Entradas" />
+                            <NavButton targetView="expenses" icon={ArrowDownCircle} label="Saídas" />
+                            <NavButton targetView="categories" icon={Folder} label="Categorias" />
+                            <NavButton targetView="clients" icon={Users} label="Clientes" />
+                        </div>
+                    </div>
+                    <div className={`mt-auto pt-6 border-t ${theme === 'dark' ? 'border-[var(--color-slate-700)]' : 'border-[var(--color-slate-200)]'} space-y-3`}>
+                        <button onClick={toggleTheme} className={`flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 py-2 rounded-lg transition-colors w-full text-left ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-600)] hover:bg-[var(--color-slate-200)]'}`}>
+                            {theme === 'dark' ? <Sun size={22} /> : <Moon size={22} />}
+                            <span className="hidden sm:inline">{theme === 'dark' ? 'Modo Claro' : 'Modo Escuro'}</span>
+                        </button>
+                        <NavButton targetView="profile" icon={User} label="Meu Perfil" />
+                        <div className={`border-t ${theme === 'dark' ? 'border-[var(--color-slate-700)]' : 'border-[var(--color-slate-200)]'} my-3`}></div>
+                        <button onClick={undo} disabled={!canUndo} className={`flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 py-2 rounded-lg transition-colors w-full text-left ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-600)] hover:bg-[var(--color-slate-200)]'}`}>
+                            <Undo2 size={22} />
+                            <span className="hidden sm:inline">Desfazer</span>
+                        </button>
+                        <button onClick={redo} disabled={!canRedo} className={`flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 py-2 rounded-lg transition-colors w-full text-left ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-600)] hover:bg-[var(--color-slate-200)]'}`}>
+                            <Redo2 size={22} />
+                            <span className="hidden sm:inline">Refazer</span>
+                        </button>
+                         <button onClick={handleImportClick} className={`flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 py-2 rounded-lg transition-colors w-full text-left ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-600)] hover:bg-[var(--color-slate-200)]'}`}>
+                            <Upload size={22} />
+                            <span className="hidden sm:inline">Importar Dados</span>
+                        </button>
+                         <button onClick={handleExportData} className={`flex flex-col sm:flex-row items-center justify-center sm:justify-start gap-2 sm:gap-3 px-3 py-2 rounded-lg transition-colors w-full text-left ${theme === 'dark' ? 'text-[var(--color-slate-300)] hover:bg-[var(--color-slate-700)]' : 'text-[var(--color-slate-600)] hover:bg-[var(--color-slate-200)]'}`}>
+                            <Download size={22} />
+                            <span className="hidden sm:inline">Exportar Dados</span>
+                        </button>
+                    </div>
+                    <div className={`mt-6 pt-4 border-t ${theme === 'dark' ? 'border-[var(--color-slate-700)]' : 'border-[var(--color-slate-200)]'} text-center opacity-60 hover:opacity-100 transition-opacity`}>
+                        <p className={`text-xs ${theme === 'dark' ? 'text-[var(--color-slate-400)]' : 'text-[var(--color-slate-500)]'} mb-2`}>Desenvolvido por</p>
+                        <img src="https://i.postimg.cc/dVgn73g8/Monocromatica-Horizontal.png" alt="Logo Guarde" className={`mx-auto h-8 ${theme === 'light' ? 'filter invert' : ''}`} />
+                    </div>
+                </nav>
+
+                <main className="flex-1 p-4 sm:p-6 lg:p-8">
+                    {renderView()}
+                </main>
+            </div>
+            <ConfirmationModal
+                isOpen={isDeleteConfirmOpen}
+                onClose={() => setDeleteConfirmOpen(false)}
+                onConfirm={confirmDeleteTransaction}
+                title="Excluir Transação"
+                message="Tem certeza que deseja excluir esta transação? Esta ação não pode ser desfeita."
+                theme={theme}
+            />
+            <ConfirmationModal
+                isOpen={isImportConfirmOpen}
+                onClose={() => setImportConfirmOpen(false)}
+                onConfirm={confirmImportData}
+                title="Importar Dados"
+                message="Isso substituirá todos os dados atuais e o histórico de ações. Tem certeza que deseja continuar?"
+                theme={theme}
+            />
+        </div>
+    );
+}
